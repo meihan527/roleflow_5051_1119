@@ -2,6 +2,9 @@ import path from "path";
 
 export const config = {
   openaiKey: () => process.env.OPENAI_API_KEY?.trim() || "",
+  aiProvider: () => process.env.AI_PROVIDER?.trim() || "openai",
+  hkustKey: () => process.env.HKUST_API_KEY?.trim() || "",
+  hkustModel: () => process.env.HKUST_MODEL?.trim() || "gpt-4o-mini",
   model: () => process.env.OPENAI_MODEL?.trim() || "gpt-5.5",
   agentModel: () =>
     process.env.OPENAI_AGENT_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || "gpt-5.5",
