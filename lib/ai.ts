@@ -1,32 +1,15 @@
 import OpenAI from "openai";
-import { zodResponseFormat, zodTextFormat } from "openai/helpers/zod";
+import { zodTextFormat } from "openai/helpers/zod";
 import type { z } from "zod";
 import { config } from "./config";
 
 let client: OpenAI | null = null;
-let hkustClient: OpenAI | null = null;
 
 export function openai() {
   const apiKey = config.openaiKey();
   if (!apiKey) throw new UserFacingError("OPENAI_API_KEY is not set. Add it to .env.local and restart the app.");
   client ??= new OpenAI({ apiKey, maxRetries: 2, timeout: 120_000 });
   return client;
-}
-
-function hkust() {
-  const apiKey = config.hkustKey();
-  if (!apiKey) {
-    throw new UserFacingError("HKUST_API_KEY is not set. Add it to .env.local and restart the app.");
-  }
-
-  hkustClient ??= new OpenAI({
-    apiKey,
-    baseURL: "https://hkust.azure-api.net/hkust-genai/v1",
-    defaultHeaders: { "api-key": apiKey },
-    maxRetries: 2,
-    timeout: 120_000,
-  });
-  return hkustClient;
 }
 
 /** Its message is safe to show in the UI. */
@@ -54,23 +37,6 @@ export async function structured<S extends z.ZodTypeAny>(opts: {
   model?: string;
   effort?: "none" | "low" | "medium" | "high";
 }): Promise<z.infer<S>> {
-  if (config.aiProvider() === "hkust") {
-    const completion = await hkust().chat.completions.parse({
-      model: opts.model || config.hkustModel(),
-      messages: [
-        { role: "system", content: opts.instructions },
-        { role: "user", content: opts.input },
-      ],
-      response_format: zodResponseFormat(opts.schema, opts.name),
-    });
-
-    const parsed = completion.choices[0]?.message.parsed;
-    if (!parsed) {
-      throw new UserFacingError("The model returned an unexpected response. Please retry.");
-    }
-    return parsed as z.infer<S>;
-  }
-  
   const res = await openai().responses.parse({
     model: opts.model || config.model(),
     reasoning: { effort: opts.effort || "low" },
