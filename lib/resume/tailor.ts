@@ -2,7 +2,8 @@ import { GROUNDING_RULES, structured } from "../ai";
 import type { Job, ResumeChange, ResumeData } from "../types";
 import { tailorSchema } from "./schema";
 
-const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9+#.]/g, "");
+const norm = (s: string) => s.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{M}\p{N}+#.]/gu, "");
+const skillText = (s: string) => s.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ").trim();
 
 // The model rewrites; code restores facts (identity, employers, dates, education) and drops untraceable skills.
 export async function tailorResume(base: ResumeData, resumeText: string, job: Job) {
@@ -32,35 +33,62 @@ ORIGINAL RESUME (raw text, for fact checking)
 ${resumeText.slice(0, 15000)}`,
   });
 
-  const resume = out.resume;
-  const changes: ResumeChange[] = [...out.changes];
+  const { resume, changes } = restoreResumeFacts(base, resumeText, out.resume);
+  return { resume, changes: [...out.changes, ...changes], coverLetter: out.cover_letter, gaps: out.gaps };
+}
+
+export function restoreResumeFacts(base: ResumeData, resumeText: string, proposed: ResumeData) {
+  const resume = { ...proposed };
+  const changes: ResumeChange[] = [];
 
   resume.name = base.name;
   resume.contact = base.contact;
 
-  // Only roles from the original, with their original titles and dates.
-  resume.experience = resume.experience
-    .map((e) => {
-      const orig = base.experience.find((o) => norm(o.company) === norm(e.company) && norm(o.title) === norm(e.title))
-        ?? base.experience.find((o) => norm(o.company) === norm(e.company));
-      return orig ? { ...e, title: orig.title, company: orig.company, start: orig.start, end: orig.end, location: orig.location } : null;
-    })
-    .filter((e): e is ResumeData["experience"][number] => e !== null);
-  for (const orig of base.experience)
-    if (!resume.experience.some((e) => norm(e.company) === norm(orig.company) && norm(e.title) === norm(orig.title)))
-      resume.experience.push(orig);
+  const originals = base.experience.map((original, index) => ({ original, index }));
+  const matched = new Set<number>();
+  resume.experience = proposed.experience.flatMap((entry) => {
+    const company = norm(entry.company);
+    const title = norm(entry.title);
+    const byCompany = /[\p{L}\p{N}]/u.test(company)
+      ? originals.filter(({ original }) => norm(original.company) === company)
+      : [];
+    let candidates = byCompany.filter(({ original }) => title && norm(original.title) === title);
+    if (!candidates.length && byCompany.length === 1) candidates = byCompany;
+    // Repeated roles need matching dates; employer-only matches must never pick between multiple roles.
+    if (candidates.length > 1)
+      candidates = candidates.filter(({ original }) => norm(original.start) === norm(entry.start) && norm(original.end) === norm(entry.end));
+    if (candidates.length !== 1 || matched.has(candidates[0].index)) return [];
+    const { original, index } = candidates[0];
+    matched.add(index);
+    return [{ ...original, bullets: entry.bullets }];
+  });
+  const discarded = proposed.experience.length - resume.experience.length;
+  const restored = originals.filter(({ index }) => !matched.has(index));
+  resume.experience.push(...restored.map(({ original }) => original));
+  if (discarded || restored.length)
+    changes.push({
+      section: "Experience",
+      change: `Discarded ${discarded} unmatched or duplicate entries; restored ${restored.length} original entries`,
+      reason: "Guardrail: each rewritten role must match one original role unambiguously",
+    });
 
   resume.education = base.education;
   resume.certifications = base.certifications;
 
-  // Skills must appear in the original text.
-  const source = norm(resumeText + JSON.stringify(base.skills));
+  const source = skillText(resumeText);
+  const originalSkills = new Set(base.skills.flatMap((group) => group.items.map(skillText)));
   const dropped: string[] = [];
-  resume.skills = resume.skills
+  resume.skills = proposed.skills
     .map((g) => ({
       category: g.category,
       items: g.items.filter((s) => {
-        const ok = source.includes(norm(s));
+        const skill = skillText(s);
+        const escaped = skill.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        // Latin tokens need boundaries (Java != JavaScript); Chinese phrases have no word separators.
+        const prefix = /^[\p{Script=Latin}\p{N}.+#]/u.test(skill) ? "(?<![\\p{Script=Latin}\\p{N}_+#.])" : "";
+        const suffix = /[\p{Script=Latin}\p{N}.+#]$/u.test(skill) ? "(?![\\p{Script=Latin}\\p{N}_+#]|\\.[\\p{Script=Latin}\\p{N}])" : "";
+        const ok = /[\p{L}\p{N}]/u.test(skill)
+          && (originalSkills.has(skill) || new RegExp(`${prefix}${escaped}${suffix}`, "u").test(source));
         if (!ok) dropped.push(s);
         return ok;
       }),
@@ -73,5 +101,5 @@ ${resumeText.slice(0, 15000)}`,
       reason: "Guardrail: not found in your original resume",
     });
 
-  return { resume, changes, coverLetter: out.cover_letter, gaps: out.gaps };
+  return { resume, changes };
 }
