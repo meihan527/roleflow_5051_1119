@@ -1,4 +1,5 @@
 import type { ResumeChange, ResumeData } from "../types";
+import { inferEmploymentType } from "./layout";
 
 // Normalize only for comparison. Keep the original wording in the final document.
 export const normalizeResumeFact = (value: string) =>
@@ -24,10 +25,20 @@ export function restoreResumeFacts(base: ResumeData, candidate: ResumeData, resu
     if (!match) return [];
     used.add(match.index);
     const { original } = match;
-    return [{ ...entry, title: original.title, company: original.company, start: original.start, end: original.end, location: original.location }];
+    const restored = { ...entry, title: original.title, company: original.company, start: original.start, end: original.end, location: original.location };
+    // Classification belongs to the source role, not to model-generated wording.
+    const employmentType = inferEmploymentType(original, resumeText);
+    if (employmentType === "unknown") delete restored.employmentType;
+    else restored.employmentType = employmentType;
+    return [restored];
   });
   base.experience.forEach((original, index) => {
-    if (!used.has(index)) resume.experience.push(structuredClone(original));
+    if (!used.has(index)) {
+      const restored = structuredClone(original);
+      const employmentType = inferEmploymentType(original, resumeText);
+      if (employmentType !== "unknown") restored.employmentType = employmentType;
+      resume.experience.push(restored);
+    }
   });
   resume.education = structuredClone(base.education);
   resume.certifications = [...base.certifications];

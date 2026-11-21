@@ -12,6 +12,7 @@ import { getTranslationDraft, listTranslationDrafts, resumeSourceHash, saveTrans
 import { applyReviewedTranslations } from "./translate";
 import { resolveResumeLanguage, type ResumeLanguage } from "./language";
 import { jobWithDetails } from "../jobs/details";
+import { prepareResumeForLayout } from "./layout";
 
 const MAX_BYTES = 8 * 1024 * 1024;
 const safe = (s: string) => s.replace(/[^\p{L}\p{N}]+/gu, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "Resume";
@@ -68,7 +69,7 @@ export async function generateResume(direction: ResumeDirection, job?: Job): Pro
   const preset = RESUME_DIRECTIONS.find((item) => item.value === direction);
   if (!preset) throw new UserFacingError("请先选择修改方向。");
 
-  const out = await tailorResume(profile.resume, profile.resumeText, job, direction);
+  const out = await tailorResume(prepareResumeForLayout(profile.resume, profile.resumeText), profile.resumeText, job, direction);
   const id = randomUUID();
   const label = job ? `${preset.label} · ${job.company} — ${job.title}` : `${preset.label} · 方向版简历`;
   if (out.outputLanguage === "en" && out.translationReviews.length) {
@@ -91,6 +92,7 @@ type PreparedResume = { resume: ResumeData; coverLetter: string; changes: Resume
 type GenerationContext = { id: string; direction: ResumeDirection; outputLanguage: ResumeLanguage; jobId?: string; label: string };
 
 async function persistGeneratedResume(profile: Profile, out: PreparedResume, context: GenerationContext) {
+  out = { ...out, resume: prepareResumeForLayout(out.resume, profile.resumeText) };
   const { id, direction, outputLanguage, jobId, label } = context;
   const base = `${safe(profile.resume?.name || out.resume.name)}_Resume`;
   const fileName = `${id}/${base}.pdf`;

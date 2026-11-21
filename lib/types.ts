@@ -20,6 +20,7 @@ export type ResumeData = {
     start: string;
     end: string;
     bullets: string[];
+    employmentType?: "work" | "internship" | "unknown";
   }[];
   projects: { name: string; tech: string[]; link: string; bullets: string[] }[];
   education: {
