@@ -32,7 +32,7 @@ const chinese: Record<string, string> = {
   "certifications.0": "大学英语六级", "achievements.0": "大学奖学金",
 };
 let server: Server;
-let mode: "valid" | "duplicate" | "missing" | "unknown" | "chinese" = "valid";
+let mode: "valid" | "duplicate" | "missing" | "unknown" | "chinese" | "english" = "valid";
 let tailorSource = source;
 const requests: { name: string; fields?: { id: string; text: string }[]; instructions?: string }[] = [];
 const envKeys = ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"];
@@ -54,6 +54,7 @@ test.beforeAll(async () => {
       if (mode === "missing") translations.pop();
       if (mode === "unknown") translations[0].id = "contact.phone";
       if (mode === "chinese") translations[0].text = "仍是中文";
+      if (mode === "english") translations[0].text = "Developed backend services.";
       value = { translations };
     } else {
       requests.push({ name, instructions: body.instructions });
@@ -222,4 +223,123 @@ test("Chinese translation includes uppercase prose and English prose containing 
     { id: "headline", text: "DEVELOPER" },
     { id: "summary", text: "Built data pipelines at 示例公司" },
   ]));
+});
+
+test("short uppercase role words and categories are translated instead of being inferred as technical names", async () => {
+  const upper = structuredClone(source);
+  upper.headline = "SALES";
+  upper.experience[0].title = "LEAD";
+  upper.skills[0].category = "DATA";
+  const result = await translateResumeToChinese(upper);
+  expect(requests[0].fields).toEqual(expect.arrayContaining([
+    { id: "headline", text: "SALES" },
+    { id: "experience.0.title", text: "LEAD" },
+    { id: "skills.0.category", text: "DATA" },
+  ]));
+  expect(result.headline).toMatch(/\p{Script=Han}/u);
+  expect(result.experience[0].title).toMatch(/\p{Script=Han}/u);
+  expect(result.skills[0].category).toMatch(/\p{Script=Han}/u);
+});
+
+test("Chinese resumes preserve existing product names without requesting a Chinese translation", async () => {
+  const technical = structuredClone(source);
+  const names = ["OpenFeign", "Element UI", "InAgent Skill", "HTML/Word", "PaddleOCR-VL-1.6"];
+  technical.skills = [{ category: "专业技能", items: names }];
+  technical.projects[0].tech = names;
+  const result = await translateResumeToChinese(technical);
+  expect(result.skills[0].items).toEqual(names);
+  expect(result.projects[0].tech).toEqual(names);
+  expect(requests).toHaveLength(0);
+  expect(technical.skills[0].items).toEqual(names);
+});
+
+test("Chinese translation preserves arbitrary project technologies while translating project prose", async () => {
+  const technical = structuredClone(source);
+  technical.headline = "Backend Engineer";
+  technical.summary = "Developed backend services.";
+  technical.projects[0].name = "Payment Platform";
+  technical.projects[0].bullets = ["Developed payment APIs."];
+  technical.projects[0].tech = ["Apache Maven", "Spring Cloud Alibaba", "Nacos 2.3", "IntelliJ IDEA", "Computer Vision", "数据库设计"];
+  technical.projects.push({ name: "数据工具", tech: ["Vendor Product SDK", "Apache Spark"], link: "", bullets: ["完成数据处理。"] });
+  const original = structuredClone(technical);
+
+  const result = await translateResumeToChinese(technical);
+
+  expect(result.summary).toBe("开发后端服务。");
+  expect(result.projects[0].name).toBe("支付平台");
+  expect(result.projects[0].bullets).toEqual(["开发支付接口。"]);
+  expect(result.projects.map((project) => project.tech)).toEqual(original.projects.map((project) => project.tech));
+  expect(requests).toHaveLength(1);
+  expect(requests[0].fields?.some((field) => /^projects\.\d+\.tech\./.test(field.id))).toBe(false);
+  expect(technical).toEqual(original);
+});
+
+test("Chinese source with unfamiliar technology names needs no translation request", async () => {
+  const technical = structuredClone(source);
+  technical.projects[0].tech = ["Apache Maven", "Spring Cloud Alibaba", "Vendor Product SDK", "IntelliJ IDEA"];
+  expect(await translateResumeToChinese(technical)).toEqual(technical);
+  expect(requests).toHaveLength(0);
+});
+
+test("Chinese translation still rejects untranslated prose and invalid field mappings", async () => {
+  const prose = structuredClone(source);
+  prose.headline = "Backend Engineer";
+  prose.summary = "Developed backend services.";
+  for (const invalid of ["duplicate", "missing", "unknown", "english"] as const) {
+    mode = invalid;
+    await expect(translateResumeToChinese(prose)).rejects.toThrow(/中文简历/);
+  }
+});
+
+test("Chinese translation allows unchanged unfamiliar names in name-bearing fields", async () => {
+  const names = structuredClone(source);
+  names.summary = "Developed backend services.";
+  names.skills.push({ category: "工具", items: ["Maven", "Nacos", "Apache Spark", "Vendor Product SDK", "Advanced Installer", "I/O"] });
+  names.projects.push({ name: "Atlas", tech: ["Vendor Product SDK"], link: "", bullets: [] });
+  names.certifications.push("Acme Cloud Professional");
+  names.achievements.push("Acme Excellence Award");
+  const original = structuredClone(names);
+
+  const result = await translateResumeToChinese(names);
+
+  expect(result.summary).toBe("开发后端服务。");
+  expect(result.skills[1]).toEqual(names.skills[1]);
+  expect(result.projects[1]).toEqual(names.projects[1]);
+  expect(result.certifications[1]).toBe(names.certifications[1]);
+  expect(result.achievements[1]).toBe(names.achievements[1]);
+  expect(names).toEqual(original);
+});
+
+test("name-bearing fields cannot bypass translation for complete English descriptions or rewritten English", async () => {
+  const prose = structuredClone(source);
+  prose.skills.push({ category: "技能", items: [] });
+  for (const description of [
+    "Developed and maintained backend services using Java.",
+    "Developed backend services using Java",
+    "Designed payment APIs using Java",
+    "Skilled in Java and SQL",
+    "Proficient with backend service development",
+    "Experienced in designing backend services",
+    "Strong knowledge of Java and SQL",
+    "5 years of experience in backend development",
+    "Responsible for backend service maintenance",
+    "Cloud infrastructure: deploying and maintaining backend services",
+  ]) {
+    prose.skills[1].items = [description];
+    await expect(translateResumeToChinese(prose)).rejects.toThrow(/skills\.1\.items\.0/);
+  }
+  prose.skills[1].items = ["Maven"];
+  mode = "english";
+  await expect(translateResumeToChinese(prose)).rejects.toThrow(/skills\.1\.items\.0/);
+});
+
+test("Chinese translation preserves score and metric facts without treating them as English prose", async () => {
+  const metrics = structuredClone(source);
+  metrics.summary = "Developed backend services.";
+  const facts = ["GPA：88.04/100", "IELTS 7.0", "CET-6: 550/710", "R² = 0.94"];
+  metrics.education[0].details.push(...facts);
+  const result = await translateResumeToChinese(metrics);
+  expect(result.summary).toBe("开发后端服务。");
+  expect(result.education[0].details.slice(1)).toEqual(facts);
+  expect(requests[0].fields?.some((field) => facts.includes(field.text))).toBe(false);
 });

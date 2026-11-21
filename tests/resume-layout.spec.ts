@@ -76,8 +76,8 @@ test("a long experience flows across PDF pages without reducing body text or cre
   const fontSize = await page.locator("body").evaluate((body) => parseFloat(getComputedStyle(body).fontSize));
   expect(fontSize).toBeGreaterThanOrEqual(14);
   const pdf = await page.pdf({ format: "A4", printBackground: true, preferCSSPageSize: true });
-  const document = await getDocumentProxy(new Uint8Array(pdf));
-  const { text } = await extractText(document, { mergePages: false });
+  const pdfDocument = await getDocumentProxy(new Uint8Array(pdf));
+  const { text } = await extractText(pdfDocument, { mergePages: false });
   expect(text.length).toBeGreaterThan(1);
   expect(text[0]).toContain("示例科技有限公司");
   for (const content of text) expect(content.trim().length).toBeGreaterThan(20);

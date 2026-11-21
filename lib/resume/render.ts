@@ -95,6 +95,7 @@ function style(template: ResumeTemplate) {
   .entry { margin-top: ${template.entrySpacing}pt; break-inside: auto; page-break-inside: auto; }
   .entry--keep { break-inside: avoid; page-break-inside: avoid; }
   .entry:first-of-type { margin-top: 0; }
+
   .entry-header { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 3pt 12pt; align-items: start; break-after: avoid; page-break-after: avoid; }
   .entry-header > :only-child { grid-column: 1 / -1; }
   .entry-title { min-width: 0; font-weight: 650; line-height: 1.35; }

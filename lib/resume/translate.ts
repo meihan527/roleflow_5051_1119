@@ -134,14 +134,51 @@ export async function translateResumeToEnglish(source: ResumeData): Promise<Resu
 const TECHNICAL_IDENTIFIER = /^(?:C\+\+|C#|\.NET|Java|JavaScript|TypeScript|Python|Go|Golang|Rust|Kotlin|Scala|Swift|PHP|Ruby|SQL|MySQL|PostgreSQL|MongoDB|Redis|Oracle|Spring(?:\s?Boot)?|Vue(?:\.js)?|React(?:\.js)?|Node(?:\.js)?|Angular|Docker|Kubernetes|Kafka|Git|Linux|Windows|PyTorch|TensorFlow|Pandas|NumPy|MATLAB|Excel|Power\s?BI|Tableau|AWS|Azure|GCP)(?:\s*[\d.]+)?$/i;
 const TECHNICAL_ACRONYM = /^(?:API|APIs|HTTP|HTTPS|REST|JSON|XML|HTML|CSS|CI\/CD|SAC|LAMOST|GSE|GPA|IELTS(?:\s*[\d.]+)?)$/i;
 
+function protectedTechnicalName(text: string, nameField: boolean) {
+  const value = text.normalize("NFKC").trim();
+  if (TECHNICAL_IDENTIFIER.test(value) || TECHNICAL_ACRONYM.test(value)) return true;
+  if (/^(?:OpenFeign|Element\s+UI|Power\s+Query|Visual\s+Studio\s+Code|HTML\/Word|Agent\s+Skill)(?:\s+[\d.]+)?$/i.test(value)) return true;
+  // Infer unfamiliar product identifiers only in name-bearing fields. A short
+  // uppercase word such as SALES or LEAD can be ordinary role/category prose.
+  return nameField && value.length <= 80
+    && /^[A-Za-z0-9+#./-]+(?:\s+(?:UI|SDK|API|Skill|[\d.]+))*$/.test(value)
+    && /[a-z][A-Z]/.test(value);
+}
+
+function resumeDescription(text: string) {
+  // Resume prose commonly omits sentence-ending punctuation. Recognize clear
+  // action/proficiency descriptions before allowing an unchanged name label.
+  return /^(?:i|we)\s+/i.test(text)
+    || /^(?:built|building|developed|developing|designed|designing|implemented|implementing|created|creating|managed|managing|led|leading|maintained|maintaining|delivered|delivering|improved|improving|optimized|optimizing|analysed|analyzed|analysing|analyzing|collaborated|collaborating|supported|supporting|worked|working|used|using|responsible)\b/i.test(text)
+    || /^(?:(?:strong|solid|extensive|advanced|basic|deep|good|working|hands-on)\s+)*(?:proficient|proficiency|skilled|experienced|experience|expertise|familiar|familiarity|knowledge|competent|capable)\s+(?:in|with|of|at|to)\b/i.test(text)
+    || /^(?:(?:over|about|nearly|at least|more than)\s+)?\d+(?:\.\d+)?\+?\s+(?:years?|months?)\s+(?:of\s+)?experience\b/i.test(text);
+}
+
+function compactNameLabel(text: string) {
+  const value = text.trim();
+  // Name-bearing lists can contain products outside any dictionary. Full
+  // sentences and detailed skill descriptions must still be translated.
+  return value.length <= 120 && value.split(/\s+/).length <= 12
+    && !/[\r\n:;。！？!?]|\.(?:\s|$)/u.test(value) && !resumeDescription(value);
+}
+
+function numericResumeFact(text: string) {
+  const value = text.normalize("NFKC").trim();
+  const labels = value.match(/[A-Z]+/g) || [];
+  // Scores and scientific metrics such as GPA: 88/100, IELTS 7.0 or R²=0.94
+  // are structured facts, even though they contain no Chinese characters.
+  return /\d/.test(value) && labels.length === 1 && labels[0].length <= 6
+    && /^[A-Z\d\s.,:/%+()<>≤≥=~*^°−-]+$/u.test(value);
+}
+
 /** Translate English prose while retaining canonical names and technical identifiers. */
 export async function translateResumeToChinese(source: ResumeData): Promise<ResumeData> {
   const resume = structuredClone(source);
-  const slots = new Map<string, { text: string; set: (text: string) => void }>();
-  const add = (id: string, text: string, set: (text: string) => void) => {
-    if (!text.trim() || !/[a-z]/i.test(text) || TECHNICAL_IDENTIFIER.test(text) || TECHNICAL_ACRONYM.test(text)) return;
+  const slots = new Map<string, { text: string; set: (text: string) => void; allowOriginalName: boolean }>();
+  const add = (id: string, text: string, set: (text: string) => void, nameField = false) => {
+    if (!text.trim() || !/[a-z]/i.test(text) || protectedTechnicalName(text, nameField) || numericResumeFact(text)) return;
     if (/\p{Script=Han}/u.test(text) && detectJobLanguage(text) === "zh-CN") return;
-    slots.set(id, { text, set });
+    slots.set(id, { text, set, allowOriginalName: nameField && compactNameLabel(text) });
   };
   // English personal and institution names remain authoritative: never invent
   // a Chinese legal name or translate someone's name without their own wording.
@@ -150,7 +187,7 @@ export async function translateResumeToChinese(source: ResumeData): Promise<Resu
   add("contact.location", source.contact.location, (text) => { resume.contact.location = text; });
   source.skills.forEach((group, i) => {
     add(`skills.${i}.category`, group.category, (text) => { resume.skills[i].category = text; });
-    group.items.forEach((skill, j) => add(`skills.${i}.items.${j}`, skill, (text) => { resume.skills[i].items[j] = text; }));
+    group.items.forEach((skill, j) => add(`skills.${i}.items.${j}`, skill, (text) => { resume.skills[i].items[j] = text; }, true));
   });
   source.experience.forEach((entry, i) => {
     add(`experience.${i}.title`, entry.title, (text) => { resume.experience[i].title = text; });
@@ -160,8 +197,9 @@ export async function translateResumeToChinese(source: ResumeData): Promise<Resu
     resume.experience[i].end = chineseResumeDate(entry.end);
   });
   source.projects.forEach((entry, i) => {
-    add(`projects.${i}.name`, entry.name, (text) => { resume.projects[i].name = text; });
-    entry.tech.forEach((tech, j) => add(`projects.${i}.tech.${j}`, tech, (text) => { resume.projects[i].tech[j] = text; }));
+    add(`projects.${i}.name`, entry.name, (text) => { resume.projects[i].name = text; }, true);
+    // A technology list contains names, not prose. Keep every name verbatim,
+    // including unfamiliar or multiword products; a whitelist cannot cover them.
     entry.bullets.forEach((bullet, j) => add(`projects.${i}.bullets.${j}`, bullet, (text) => { resume.projects[i].bullets[j] = text; }));
   });
   source.education.forEach((entry, i) => {
@@ -171,8 +209,8 @@ export async function translateResumeToChinese(source: ResumeData): Promise<Resu
     resume.education[i].start = chineseResumeDate(entry.start);
     resume.education[i].end = chineseResumeDate(entry.end);
   });
-  source.certifications.forEach((item, i) => add(`certifications.${i}`, item, (text) => { resume.certifications[i] = text; }));
-  source.achievements.forEach((item, i) => add(`achievements.${i}`, item, (text) => { resume.achievements[i] = text; }));
+  source.certifications.forEach((item, i) => add(`certifications.${i}`, item, (text) => { resume.certifications[i] = text; }, true));
+  source.achievements.forEach((item, i) => add(`achievements.${i}`, item, (text) => { resume.achievements[i] = text; }, true));
   if (!slots.size) return resume;
   const output = await structured({
     schema: translationSchema,
@@ -183,18 +221,26 @@ ${GROUNDING_RULES}
 - Return exactly one {id, text} for every supplied field ID. Do not omit, repeat or add IDs; keep each translation tied to its source field.
 - Translate the prose, job titles, qualifications and skill descriptions into Chinese. Preserve the meaning, numbers, responsibilities and seniority; do not add claims or reinterpret a qualification.
 - Keep technology/product identifiers such as Java, C++, MySQL, Python and Spring Boot exactly as supplied inside Chinese prose.
+- Fields listed in nameFields can contain technology, product, project, award or credential names. Preserve their original spelling when an official Chinese name is not supplied; returning the unchanged name is valid. Still translate general capability labels and skill descriptions into Chinese. Never invent a Chinese name merely to include Chinese characters.
 - The candidate's name, company/school names, email, phone, URLs and dates are controlled separately. Do not invent official Chinese names or return extra fields.
 - Do not include Markdown, explanations or new sections.`,
-    input: JSON.stringify({ fields: [...slots].map(([id, slot]) => ({ id, text: slot.text })) }),
+    input: JSON.stringify({
+      fields: [...slots].map(([id, slot]) => ({ id, text: slot.text })),
+      nameFields: [...slots].filter(([, slot]) => slot.allowOriginalName).map(([id]) => id),
+    }),
   });
   if (output.translations.length !== slots.size) throw new UserFacingError("中文简历翻译字段不完整，请重新生成。");
   const seen = new Set<string>();
   for (const translation of output.translations) {
     const slot = slots.get(translation.id);
-    if (!slot || seen.has(translation.id) || !translation.text.trim() || !/\p{Script=Han}/u.test(translation.text))
-      throw new UserFacingError("中文简历翻译结果未通过完整性校验，请重新生成。");
+    if (!slot || seen.has(translation.id) || !translation.text.trim())
+      throw new UserFacingError("中文简历翻译包含未知、重复或空白字段，请重新生成。");
+    const text = translation.text.trim();
+    const unchangedName = slot.allowOriginalName && text === slot.text.trim();
+    if (!/\p{Script=Han}/u.test(text) && !unchangedName)
+      throw new UserFacingError(`中文简历的 ${translation.id} 字段仍为英文正文，请重新生成。`);
     seen.add(translation.id);
-    slot.set(translation.text.trim());
+    slot.set(text);
   }
   return resume;
 }
