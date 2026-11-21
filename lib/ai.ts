@@ -4,6 +4,7 @@ import type { z } from "zod";
 import { config } from "./config";
 
 let client: OpenAI | null = null;
+let clientSettings: { apiKey: string; baseURL: string | undefined } | null = null;
 
 export function validateApiBaseUrl(value?: string) {
   const baseURL = value?.trim();
@@ -28,7 +29,11 @@ export function validateApiBaseUrl(value?: string) {
 export function openai() {
   const apiKey = config.openaiKey();
   if (!apiKey) throw new UserFacingError("OPENAI_API_KEY is not set. Add it to .env.local and restart the app.");
-  client ??= new OpenAI({ apiKey, baseURL: validateApiBaseUrl(config.baseUrl()), maxRetries: 2, timeout: 120_000 });
+  const baseURL = validateApiBaseUrl(config.baseUrl());
+  if (!client || clientSettings?.apiKey !== apiKey || clientSettings?.baseURL !== baseURL) {
+    client = new OpenAI({ apiKey, baseURL, maxRetries: 2, timeout: 120_000 });
+    clientSettings = { apiKey, baseURL };
+  }
   return client;
 }
 
