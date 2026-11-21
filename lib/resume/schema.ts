@@ -38,7 +38,26 @@ export const resumeSchema = z.object({
   ),
   certifications: z.array(z.string()),
   achievements: z.array(z.string()),
+  activities: z.array(z.object({
+    organization: z.string(),
+    title: z.string(),
+    start: z.string(),
+    end: z.string(),
+    bullets: z.array(z.string()),
+  })).describe("Campus leadership, clubs, volunteer work and social practice, separate from employment and technical projects; empty if absent"),
 });
+
+export const tailorRequestSchema = z.object({
+  templateId: z.enum(["general", "state-owned", "big-tech", "multinational"]).default("general"),
+}).strict();
+
+export const tailorConfirmationSchema = tailorRequestSchema.extend({
+  draftId: z.string().uuid(),
+  confirmations: z.array(z.object({
+    id: z.string().min(1).max(200),
+    text: z.string().trim().min(1).max(4000),
+  }).strict()).min(1).max(300),
+}).strict();
 
 export const tailorSchema = z.object({
   resume: resumeSchema,

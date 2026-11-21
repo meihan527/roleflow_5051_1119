@@ -17,10 +17,11 @@ export const GET = route(async (req: NextRequest, ctx: RouteContext<"/api/resume
   if (!name) return badRequest("No cover letter for this version.", 404);
   const body = await fs.readFile(resumeFilePath(name));
   const download = req.nextUrl.searchParams.has("download");
+  const filename = encodeURIComponent(path.basename(name)).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
   return new Response(body, {
     headers: {
       "Content-Type": TYPES[path.extname(name).toLowerCase()] || "application/octet-stream",
-      "Content-Disposition": `${download ? "attachment" : "inline"}; filename="${path.basename(name)}"`,
+      "Content-Disposition": `${download ? "attachment" : "inline"}; filename*=UTF-8''${filename}`,
       "Cache-Control": "no-store",
     },
   });

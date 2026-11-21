@@ -42,6 +42,7 @@ export async function structureResume(text: string): Promise<ResumeData> {
 ${GROUNDING_RULES}
 - Copy wording faithfully; do not improve, summarise or add bullets. Use "" or [] when a field is absent.
 - Dates stay in the resume's own format (e.g. "Jun 2023", "Present").
+- Put campus leadership, student clubs, volunteer work and social practice in activities, with the original organization, title, dates and bullets. Do not duplicate them in experience or projects. Employment and internships belong in experience; technical and research projects belong in projects.
 - If the resume has no summary section, leave summary empty.`,
     input: text.slice(0, 30000),
   });

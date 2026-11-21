@@ -160,8 +160,9 @@ export function ResumePanel({
           </div>
           <p className="mt-3 text-xs text-muted">
             {plural(resume.experience.length, "role", "roles")} · {plural(resume.projects.length, "project", "projects")} ·{" "}
-            {plural(resume.education.length, "education entry", "education entries")} parsed
+            {plural(resume.education.length, "education entry", "education entries")} · {plural(resume.activities?.length ?? 0, "campus / volunteer entry", "campus / volunteer entries")} parsed
           </p>
+          {resume.activities === undefined && <p className="mt-2 text-xs text-muted">旧版档案尚未单独提取校园／志愿经历；如需在模板中分栏显示，请重新上传原简历。</p>}
 
           {missing.length > 0 && !open && (
             <div className="mt-4">

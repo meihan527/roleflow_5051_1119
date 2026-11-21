@@ -14,6 +14,8 @@ export function resumeToText(r: ResumeData) {
     ...r.projects.map((p) => `- ${p.name} [${p.tech.join(", ")}] ${p.link}\n${p.bullets.map((b) => `  • ${b}`).join("\n")}`),
     "EDUCATION:",
     ...r.education.map((e) => `- ${e.degree} ${e.field}, ${e.school} (${e.start} – ${e.end}) ${e.details.join("; ")}`),
+    r.activities?.length ? "CAMPUS & VOLUNTEER EXPERIENCE:" : "",
+    ...(r.activities ?? []).map((a) => `- ${a.title}, ${a.organization} (${a.start} – ${a.end})\n${a.bullets.map((b) => `  • ${b}`).join("\n")}`),
     r.certifications.length ? `CERTIFICATIONS: ${r.certifications.join("; ")}` : "",
     r.achievements.length ? `ACHIEVEMENTS: ${r.achievements.join("; ")}` : "",
   ];

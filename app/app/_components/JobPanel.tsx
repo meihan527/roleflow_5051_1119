@@ -1,15 +1,18 @@
 "use client";
 import { ArrowUpRight, Bot, Check, ChevronDown, Download, FileText, Gauge, Info, Plus, Wand2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { Job, Match, ResumeVersion } from "@/lib/types";
+import type { Job, Match, ResumeLanguage, ResumeTailorDraft, ResumeTemplateId, ResumeVersion, TailorResponse } from "@/lib/types";
+import { resumeTemplates, templateOutputLanguage } from "@/lib/resume/templates";
 import { api, errorText, timeAgo } from "./api";
-import { Button, Card, Eyebrow, Notice, SourceBadge, Spinner } from "./ui";
+import { Button, Card, inputCls, Notice, SourceBadge, Spinner } from "./ui";
 
 type Tailored = { version: ResumeVersion; gaps: string[] };
+const languageLabels: Record<ResumeLanguage, string> = { zh: "中文", en: "English" };
 
 export function JobPanel({
   job,
   hasResume,
+  sourceLanguage,
   versions,
   originalId,
   agentBusy,
@@ -19,6 +22,7 @@ export function JobPanel({
 }: {
   job: Job;
   hasResume: boolean;
+  sourceLanguage: ResumeLanguage;
   versions: ResumeVersion[];
   originalId: string | null;
   agentBusy: boolean;
@@ -26,23 +30,50 @@ export function JobPanel({
   onVersionsChanged: () => Promise<void>;
   onStart: (jobId: string, versionId: string, autoSubmit: boolean) => Promise<void>;
 }) {
-  // Keyed by job id in the parent, so state resets per job.
+  // The parent keys this panel by job and original resume, discarding local drafts on either change.
   const [detail, setDetail] = useState<Job>(job);
   const [loading, setLoading] = useState(true);
   const [match, setMatch] = useState<Match | null>(null);
   const [matching, setMatching] = useState(false);
   const [tailored, setTailored] = useState<Tailored | null>(null);
   const [tailoring, setTailoring] = useState(false);
+  const [draft, setDraft] = useState<ResumeTailorDraft | null>(null);
+  const [confirmations, setConfirmations] = useState<Record<string, string>>({});
+  const [confirming, setConfirming] = useState(false);
+  const busy = tailoring || confirming;
   const [showDesc, setShowDesc] = useState(false);
   const [showLetter, setShowLetter] = useState(false);
   const [autoSubmit, setAutoSubmit] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
+  const [templateId, setTemplateId] = useState<ResumeTemplateId>("general");
+  const outputLanguage = templateOutputLanguage(templateId, sourceLanguage);
+  const template = resumeTemplates[templateId];
 
-  const existing = versions.find((v) => v.jobId === job.id);
-  const tailoredVersion = tailored?.version ?? existing;
+  const matchesSelection = (v: ResumeVersion) => v.kind === "tailored" && v.jobId === job.id
+    && v.templateId === templateId && !!originalId && v.sourceResumeId === originalId
+    && v.outputLanguage === outputLanguage;
+  const existing = versions.find(matchesSelection);
+  const currentTailored = tailored && matchesSelection(tailored.version) ? tailored : null;
+  // Never offer an older PDF while the replacement is awaiting explicit confirmation.
+  const tailoredVersion = draft ? undefined : currentTailored?.version ?? existing;
   const [useTailored, setUseTailored] = useState(true);
-  const chosenVersion = useTailored && tailoredVersion ? tailoredVersion.id : originalId;
+  const chosenVersion = useTailored ? tailoredVersion?.id : originalId;
+  const missingConfirmation = draft?.review.some((item) => !confirmations[item.id]?.trim());
+
+  const resetTailoredSelection = () => {
+    setDraft(null);
+    setConfirmations({});
+    setTailored(null);
+    setShowLetter(false);
+    setUseTailored(true);
+    setError("");
+  };
+
+  const changeTemplate = (id: ResumeTemplateId) => {
+    setTemplateId(id);
+    resetTailoredSelection();
+  };
 
   const jobId = job.id;
   useEffect(() => {
@@ -69,13 +100,18 @@ export function JobPanel({
   };
 
   const runTailor = async () => {
+    if (busy || draft || starting) return;
     setTailoring(true);
-    setError("");
+    resetTailoredSelection();
     try {
-      const out = await api<Tailored>(`/api/jobs/${encodeURIComponent(job.id)}/tailor`, { method: "POST" });
-      setTailored(out);
-      setUseTailored(true);
-      await onVersionsChanged();
+      const out = await api<TailorResponse>(`/api/jobs/${encodeURIComponent(job.id)}/tailor`, { json: { templateId } });
+      if ("draft" in out) {
+        setDraft(out.draft);
+        setConfirmations(Object.fromEntries(out.draft.review.map((item) => [item.id, item.suggested])));
+      } else {
+        setTailored(out);
+        await onVersionsChanged();
+      }
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -83,8 +119,33 @@ export function JobPanel({
     }
   };
 
+  const confirmDraft = async () => {
+    if (!draft || busy || starting || missingConfirmation) return;
+    setConfirming(true);
+    setError("");
+    try {
+      const out = await api<Tailored>(`/api/jobs/${encodeURIComponent(job.id)}/tailor`, {
+        json: {
+          templateId: draft.templateId,
+          draftId: draft.id,
+          confirmations: draft.review.map((item) => ({ id: item.id, text: confirmations[item.id].trim() })),
+        },
+      });
+      setTailored(out);
+      setDraft(null);
+      setConfirmations({});
+      setUseTailored(true);
+      await onVersionsChanged();
+    } catch (err) {
+      // Keep both the draft and all edits available when confirmation fails.
+      setError(errorText(err));
+    } finally {
+      setConfirming(false);
+    }
+  };
+
   const start = async () => {
-    if (!chosenVersion) return;
+    if (!chosenVersion || draft || busy || starting) return;
     setStarting(true);
     setError("");
     try {
@@ -125,7 +186,7 @@ export function JobPanel({
         <div className="mt-5"><Spinner label="Loading the full job description…" /></div>
       ) : detail.description ? (
         <div className="mt-4">
-          <button onClick={() => setShowDesc(!showDesc)} className="flex items-center gap-1 text-sm font-semibold text-accent" aria-expanded={showDesc}>
+          <button disabled={busy} onClick={() => setShowDesc(!showDesc)} className="flex items-center gap-1 text-sm font-semibold text-accent" aria-expanded={showDesc}>
             Job description <ChevronDown className={`h-4 w-4 transition ${showDesc ? "rotate-180" : ""}`} />
           </button>
           {showDesc && <div className="mt-2 max-h-80 overflow-y-auto whitespace-pre-line rounded-xl bg-paper p-3 text-sm leading-relaxed text-[#45443f]">{detail.description}</div>}
@@ -147,7 +208,7 @@ export function JobPanel({
             <h3 className="font-semibold">Match analysis</h3>
           </div>
           {!match && (
-            <Button variant="secondary" onClick={runMatch} busy={matching} disabled={!hasResume || loading || !detail.description}>
+            <Button variant="secondary" onClick={runMatch} busy={matching} disabled={!hasResume || loading || !detail.description || busy}>
               Analyze
             </Button>
           )}
@@ -188,16 +249,76 @@ export function JobPanel({
             <Wand2 size={17} className="text-accent" />
             <h3 className="font-semibold">Tailored resume</h3>
           </div>
-          <Button variant="secondary" onClick={runTailor} busy={tailoring} disabled={!hasResume || loading || !detail.description}>
+          <Button variant="secondary" onClick={runTailor} busy={tailoring} disabled={!hasResume || loading || !detail.description || starting || busy || !!draft}>
             {tailoredVersion ? "Re-tailor" : "Tailor for this job"}
           </Button>
         </div>
-        {tailoring && <p className="mt-3 text-sm text-muted">Rewriting your resume for this job description and rendering a PDF — about 20–40 seconds.</p>}
-        {!tailoredVersion && !tailoring && (
-          <p className="mt-2 text-sm text-muted">Reorders and rephrases your real experience for this job, checks every skill against your original resume, and writes a cover letter.</p>
+        <div className="mt-3 rounded-xl border border-line bg-paper p-3">
+          <label htmlFor={`resume-template-${job.id}`} className="text-sm font-semibold">简历结构模板</label>
+          <select
+            id={`resume-template-${job.id}`}
+            className={`${inputCls} mt-2`}
+            value={templateId}
+            disabled={busy || starting}
+            onChange={(event) => changeTemplate(event.target.value as ResumeTemplateId)}
+          >
+            {Object.entries(resumeTemplates).map(([id, item]) => <option key={id} value={id}>{item.label}</option>)}
+          </select>
+          <p className="mt-2 text-sm text-muted">{template.description}</p>
+        </div>
+        {busy && <p role="status" className="mt-3 text-sm text-muted">
+          {confirming
+            ? "正在使用已确认内容生成 PDF，不再调用 AI…"
+            : sourceLanguage === outputLanguage
+              ? `正在按岗位改写简历与求职信（${languageLabels[sourceLanguage]} → ${languageLabels[outputLanguage]}）并生成 PDF…`
+              : `正在按岗位改写简历与求职信并翻译（${languageLabels[sourceLanguage]} → ${languageLabels[outputLanguage]}），随后请确认候选译名…`}
+        </p>}
+        {draft && (
+          <section aria-label="译名确认" className="enter mt-4 grid min-w-0 gap-3">
+            <h4 className="font-semibold">确认候选译名 · {languageLabels[sourceLanguage]} → {languageLabels[draft.outputLanguage]}</h4>
+            <Notice tone="warn">候选译名，未经官方来源核实；请优先填写官网/证书上的名称，姓名使用本人认可的拼写，确认后才生成PDF</Notice>
+            <p className="text-xs text-muted">请核对姓名、公司和教育信息。日期保持不变，不可编辑。草稿 24 小时后过期；取消或切换模板将放弃本次确认。</p>
+            <fieldset disabled={busy || starting} className="grid min-w-0 gap-3">
+              <legend className="sr-only">原文与候选译名</legend>
+              {draft.review.map((item, index) => (
+                <div key={item.id} className="min-w-0 rounded-xl border border-line bg-paper p-3">
+                  <p className="text-sm font-semibold">{item.label}</p>
+                  <div className="mt-2 grid min-w-0 gap-3 sm:grid-cols-2">
+                    <div className="min-w-0">
+                      <p className="text-xs text-muted">原文</p>
+                      <p id={`translation-source-${job.id}-${index}`} className="mt-1 whitespace-pre-wrap break-words text-sm">{item.source}</p>
+                    </div>
+                    <label className="grid min-w-0 gap-1 text-xs text-muted">
+                      <span>{item.label} · 候选译名</span>
+                      <textarea
+                        className={`${inputCls} min-h-20 resize-y disabled:opacity-55`}
+                        rows={2}
+                        value={confirmations[item.id] ?? ""}
+                        required
+                        maxLength={4000}
+                        aria-describedby={`translation-source-${job.id}-${index}`}
+                        onChange={(event) => setConfirmations((values) => ({
+                          ...values,
+                          ...Object.fromEntries(draft.review.filter((field) => field.source === item.source).map((field) => [field.id, event.target.value])),
+                        }))}
+                      />
+                    </label>
+                  </div>
+                </div>
+              ))}
+            </fieldset>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={confirmDraft} busy={confirming} disabled={busy || starting || missingConfirmation}>确认译名并生成 PDF</Button>
+              <Button variant="secondary" onClick={resetTailoredSelection} disabled={busy || starting}>取消译名确认</Button>
+            </div>
+          </section>
         )}
-        {tailoredVersion && (
+        {!tailoredVersion && !busy && !draft && (
+          <p className="mt-2 text-sm text-muted">按岗位改写简历与求职信；跨语言时，先确认候选译名，再生成 PDF。</p>
+        )}
+        {tailoredVersion && !busy && (
           <div className="enter mt-3 grid gap-3">
+            <p className="text-sm font-semibold text-accent">当前版本：{template.label} · {languageLabels[outputLanguage]}</p>
             {tailoredVersion.changes && tailoredVersion.changes.length > 0 && (
               <ul className="grid gap-2">
                 {tailoredVersion.changes.map((c, i) => (
@@ -208,8 +329,8 @@ export function JobPanel({
                 ))}
               </ul>
             )}
-            {tailored?.gaps && tailored.gaps.length > 0 && (
-              <p className="text-xs text-muted"><strong className="text-ink">Not claimed (not in your resume):</strong> {tailored.gaps.join("; ")}</p>
+            {currentTailored?.gaps && currentTailored.gaps.length > 0 && (
+              <p className="text-xs text-muted"><strong className="text-ink">Not claimed (not in your resume):</strong> {currentTailored.gaps.join("; ")}</p>
             )}
             <iframe title="Tailored resume preview" src={`/api/resume/${tailoredVersion.id}#view=FitH`} className="h-[520px] w-full rounded-xl border border-line bg-white" />
             <div className="flex flex-wrap gap-2">
@@ -247,23 +368,25 @@ export function JobPanel({
           <legend className="mb-1 font-medium">Resume to upload</legend>
           {tailoredVersion && (
             <label className="flex items-center gap-2 rounded-xl border border-line px-3 py-2">
-              <input type="radio" name={`ver-${job.id}`} checked={useTailored} onChange={() => setUseTailored(true)} />
-              <span>Tailored PDF for {detail.company} <span className="text-muted">(+ cover letter)</span></span>
+              <input type="radio" name={`ver-${job.id}`} checked={useTailored} onChange={() => setUseTailored(true)} disabled={starting || busy} />
+              <span>Tailored PDF for {detail.company} · {template.label} · {languageLabels[outputLanguage]} <span className="text-muted">(+ cover letter)</span></span>
             </label>
           )}
           <label className="flex items-center gap-2 rounded-xl border border-line px-3 py-2">
-            <input type="radio" name={`ver-${job.id}`} checked={!useTailored || !tailoredVersion} onChange={() => setUseTailored(false)} disabled={!originalId} />
+            <input type="radio" name={`ver-${job.id}`} checked={!useTailored} onChange={() => setUseTailored(false)} disabled={!originalId || starting || busy || !!draft} />
             <span>Your original upload</span>
           </label>
         </fieldset>
+        {draft && <p className="mt-2 text-xs text-muted">请先确认译名并生成 PDF，或取消本次确认，再选择简历投递。</p>}
+        {!tailoredVersion && !draft && useTailored && <p className="mt-2 text-xs text-muted">当前原始简历尚无此模板的{languageLabels[outputLanguage]}版本。请先生成，或明确选择使用原始简历。</p>}
         <label className="mt-3 flex items-start gap-2 text-sm">
-          <input type="checkbox" className="mt-1" checked={autoSubmit} onChange={(e) => setAutoSubmit(e.target.checked)} />
+          <input type="checkbox" className="mt-1" checked={autoSubmit} disabled={busy || starting || !!draft} onChange={(e) => setAutoSubmit(e.target.checked)} />
           <span>
             Submit automatically when the form is complete
             <span className="block text-xs text-muted">Off by default: the agent waits for you to review and approve the final click.</span>
           </span>
         </label>
-        <Button className="mt-4 w-full py-3" onClick={start} busy={starting} disabled={!hasResume || !chosenVersion || agentBusy || loading}>
+        <Button className="mt-4 w-full py-3" onClick={start} busy={starting} disabled={!hasResume || !chosenVersion || agentBusy || loading || busy || !!draft}>
           <Bot size={17} /> {agentBusy ? "Another application is running" : "Run application agent"}
         </Button>
       </div>

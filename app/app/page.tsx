@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import type { AutopilotState } from "@/lib/agent/autopilot";
 import type { ApplicationRun, Job, Profile, ResumeVersion } from "@/lib/types";
+import { inferResumeLanguage } from "@/lib/resume/templates";
 import { api, errorText } from "./_components/api";
 import { AutopilotPanel } from "./_components/AutopilotPanel";
 import { History } from "./_components/History";
@@ -240,9 +241,10 @@ export default function Workspace() {
         <div>
           {selected ? (
             <JobPanel
-              key={selected.id}
+              key={`${selected.id}:${profile?.originalResumeId ?? ""}`}
               job={selected}
               hasResume={hasResume}
+              sourceLanguage={profile?.resume ? inferResumeLanguage(profile.resume) : "en"}
               versions={data?.versions ?? []}
               originalId={profile?.originalResumeId ?? null}
               agentBusy={agentBusy}

@@ -30,7 +30,20 @@ export type ResumeData = {
   }[];
   certifications: string[];
   achievements: string[];
+  activities?: { organization: string; title: string; start: string; end: string; bullets: string[] }[];
 };
+
+export type ResumeTemplateId = "general" | "state-owned" | "big-tech" | "multinational";
+export type ResumeLanguage = "zh" | "en";
+export type ResumeTranslationReview = { id: string; label: string; source: string; suggested: string };
+export type ResumeTailorDraft = {
+  id: string;
+  templateId: ResumeTemplateId;
+  outputLanguage: ResumeLanguage;
+  sourceResumeId: string;
+  review: ResumeTranslationReview[];
+};
+export type TailorResponse = { version: ResumeVersion; gaps: string[] } | { draft: ResumeTailorDraft };
 
 /** Facts forms ask for that a resume usually lacks. */
 export type Preferences = {
@@ -52,6 +65,9 @@ export type ResumeVersion = {
   id: string;
   kind: "original" | "base" | "tailored";
   jobId?: string;
+  templateId?: ResumeTemplateId;
+  outputLanguage?: ResumeLanguage;
+  sourceResumeId?: string;
   label: string;
   fileName: string;
   mimeType: string;
@@ -59,6 +75,7 @@ export type ResumeVersion = {
   changes?: ResumeChange[];
   coverLetter?: string;
   coverLetterFile?: string;
+  confirmationFingerprint?: string;
 };
 
 export type ResumeChange = { section: string; change: string; reason: string };

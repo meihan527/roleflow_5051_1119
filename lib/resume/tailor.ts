@@ -1,12 +1,17 @@
 import { GROUNDING_RULES, structured } from "../ai";
-import type { Job, ResumeChange, ResumeData } from "../types";
+import type { Job, ResumeChange, ResumeData, ResumeTemplateId } from "../types";
 import { tailorSchema } from "./schema";
+import { inferResumeLanguage, templateInstructions, templateOutputLanguage } from "./templates";
+import { translateResume } from "./translate";
 
 const norm = (s: string) => s.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{M}\p{N}+#.]/gu, "");
 const skillText = (s: string) => s.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ").trim();
 
 // The model rewrites; code restores facts (identity, employers, dates, education) and drops untraceable skills.
-export async function tailorResume(base: ResumeData, resumeText: string, job: Job) {
+export async function tailorResume(base: ResumeData, resumeText: string, job: Job, templateId: ResumeTemplateId = "general") {
+  const sourceLanguage = inferResumeLanguage(base);
+  const outputLanguage = templateOutputLanguage(templateId, sourceLanguage);
+  const rewriteStart = performance.now();
   const out = await structured({
     schema: tailorSchema,
     name: "tailored_resume",
@@ -18,7 +23,9 @@ Allowed edits:
 - Reorder sections' items and bullets so the most relevant come first; rephrase bullets to use the job's terminology where it truthfully describes the same work.
 - Reorder and regroup skills; drop clearly irrelevant ones. Only list skills that appear in the original resume.
 - Trim weak or irrelevant bullets to keep the resume to roughly one page of content.
-Not allowed: adding employers, roles, dates, degrees, certifications, metrics, tools or responsibilities that are not in the original. Keep employer names, job titles, dates and schools exactly as written.`,
+Not allowed: adding employers, roles, dates, degrees, certifications, metrics, tools or responsibilities that are not in the original. Keep employer names, job titles, dates and schools exactly as written.
+Write the resume, change explanations, gaps and cover letter in ${sourceLanguage === "zh" ? "Simplified Chinese" : "English"}. Preserve technical names such as Python and SQL.
+${templateInstructions(templateId)}`,
     input: `JOB
 Title: ${job.title}
 Company: ${job.company}
@@ -33,8 +40,19 @@ ORIGINAL RESUME (raw text, for fact checking)
 ${resumeText.slice(0, 15000)}`,
   });
 
+  const rewriteMs = Math.round(performance.now() - rewriteStart);
+  const guardStart = performance.now();
   const { resume, changes } = restoreResumeFacts(base, resumeText, out.resume);
-  return { resume, changes: [...out.changes, ...changes], coverLetter: out.cover_letter, gaps: out.gaps };
+  const content = { resume, changes: [...out.changes, ...changes], coverLetter: out.cover_letter, gaps: out.gaps };
+  const guardMs = Math.round(performance.now() - guardStart);
+  if (sourceLanguage === outputLanguage) {
+    console.info("[resume:timing]", { rewriteMs, guardMs, translationMs: 0, modelCalls: 1 });
+    return { ...content, outputLanguage, review: [] };
+  }
+  const translationStart = performance.now();
+  const translated = await translateResume(content, outputLanguage, [job.company], resumeText.slice(0, 15000));
+  console.info("[resume:timing]", { rewriteMs, guardMs, translationMs: Math.round(performance.now() - translationStart), modelCalls: 2 });
+  return { ...translated, outputLanguage };
 }
 
 export function restoreResumeFacts(base: ResumeData, resumeText: string, proposed: ResumeData) {
@@ -74,6 +92,30 @@ export function restoreResumeFacts(base: ResumeData, resumeText: string, propose
 
   resume.education = base.education;
   resume.certifications = base.certifications;
+
+  const activities = base.activities ?? [];
+  const matchedActivities = new Set<number>();
+  resume.activities = (proposed.activities ?? []).flatMap((entry) => {
+    const organization = norm(entry.organization);
+    const title = norm(entry.title);
+    let candidates = activities.map((original, index) => ({ original, index }))
+      .filter(({ original }) => organization && title && norm(original.organization) === organization && norm(original.title) === title);
+    if (candidates.length > 1)
+      candidates = candidates.filter(({ original }) => norm(original.start) === norm(entry.start) && norm(original.end) === norm(entry.end));
+    if (candidates.length !== 1 || matchedActivities.has(candidates[0].index)) return [];
+    const { original, index } = candidates[0];
+    matchedActivities.add(index);
+    return [{ ...original, bullets: entry.bullets }];
+  });
+  const discardedActivities = (proposed.activities ?? []).length - resume.activities.length;
+  const restoredActivities = activities.filter((_, index) => !matchedActivities.has(index));
+  resume.activities.push(...restoredActivities);
+  if (discardedActivities || restoredActivities.length)
+    changes.push({
+      section: "Activities",
+      change: `Discarded ${discardedActivities} unmatched or duplicate entries; restored ${restoredActivities.length} original entries`,
+      reason: "Guardrail: campus and volunteer roles must match the original resume",
+    });
 
   const source = skillText(resumeText);
   const originalSkills = new Set(base.skills.flatMap((group) => group.items.map(skillText)));

@@ -18,6 +18,7 @@ export function resumeDigest(r: ResumeData) {
     ...r.experience.map((e) => `${e.title} @ ${e.company} (${e.start}–${e.end}): ${e.bullets.join(" ")}`),
     ...r.projects.map((p) => `Project ${p.name} [${p.tech.join(", ")}]: ${p.bullets.join(" ")}`),
     ...r.education.map((e) => `${e.degree} ${e.field}, ${e.school} (${e.end})`),
+    ...(r.activities ?? []).map((a) => `Campus/volunteer: ${a.title} @ ${a.organization} (${a.start}–${a.end}): ${a.bullets.join(" ")}`),
   ]
     .filter(Boolean)
     .join("\n");
