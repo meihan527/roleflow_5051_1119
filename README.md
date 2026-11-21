@@ -108,6 +108,7 @@ All settings are environment variables in `.env.local`:
 | Variable | Default | Description |
 |---|---|---|
 | `OPENAI_API_KEY` | — | **Required.** Used for parsing, matching, tailoring, web search and the agent. |
+| `OPENAI_BASE_URL` | Official API | Optional compatible Responses API root URL (usually ending in `/v1`). The browser agent requires image input and function tools; live web search requires `web_search`. Chat-Completions-only endpoints are not supported. |
 | `OPENAI_MODEL` | `gpt-5.5` | Model for parsing, matching, tailoring and search. |
 | `OPENAI_AGENT_MODEL` | `OPENAI_MODEL` | Model that drives the browser agent. |
 | `BROWSER_CHANNEL` | `chrome` | `chrome`, `msedge` or `chromium`. |

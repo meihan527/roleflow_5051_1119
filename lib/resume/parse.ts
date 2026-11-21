@@ -21,17 +21,25 @@ export async function extractResumeText(buffer: Buffer, fileName: string) {
   throw new UserFacingError("Please upload a PDF or DOCX resume.");
 }
 
-// PDF text keeps visual line wraps.
-function unwrap<T>(value: T): T {
-  if (typeof value === "string") return value.replace(/\s*\n\s*/g, " ").trim() as T;
-  if (Array.isArray(value)) return value.map(unwrap) as T;
+// PDF text keeps visual line wraps; Chinese words should not gain spaces at a wrap.
+export function unwrapResumeFields<T>(value: T): T {
+  if (typeof value === "string")
+    return value.replace(/(\p{Script=Han})\s*\r?\n\s*(?=\p{Script=Han})/gu, "$1").replace(/\s*\r?\n\s*/g, " ").trim() as T;
+  if (Array.isArray(value)) return value.map(unwrapResumeFields) as T;
   if (value && typeof value === "object")
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, unwrap(v)])) as T;
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, unwrapResumeFields(v)])) as T;
   return value;
 }
 
+export function hasReadableResumeText(text: string) {
+  const characters = text.replace(/\s/g, "");
+  const hanCount = (characters.match(/\p{Script=Han}/gu) || []).length;
+  // Compact Chinese resumes convey more information per character than English text.
+  return characters.length >= 200 || (hanCount >= 30 && characters.length >= 60);
+}
+
 export async function structureResume(text: string): Promise<ResumeData> {
-  if (text.replace(/\s/g, "").length < 200)
+  if (!hasReadableResumeText(text))
     throw new UserFacingError(
       "We couldn't read enough text from that file. If it's a scanned PDF, export a text-based PDF or DOCX instead.",
     );
@@ -41,9 +49,10 @@ export async function structureResume(text: string): Promise<ResumeData> {
     instructions: `You convert resume text into structured JSON exactly as written.
 ${GROUNDING_RULES}
 - Copy wording faithfully; do not improve, summarise or add bullets. Use "" or [] when a field is absent.
+- Keep the source language, including Chinese text. Never translate names, employers, job titles, schools or skills. Recognize Chinese headings such as 基本信息、教育经历、实习经历、工作经历、项目经历、专业技能、证书 and 荣誉.
 - Dates stay in the resume's own format (e.g. "Jun 2023", "Present").
 - If the resume has no summary section, leave summary empty.`,
     input: text.slice(0, 30000),
   });
-  return unwrap(resume);
+  return unwrapResumeFields(resume);
 }
